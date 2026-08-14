@@ -1,183 +1,313 @@
-
 # Generative Flow Models for Quantum States
 
-A PyTorch implementation of **Generative Flow Models for quantum states**.
+A PyTorch implementation of **generative flow models for SRE-based quantum-state generation**.
 
-This project investigates whether flow-based generative models can learn the distribution of quantum states and efficiently generate new states conditioned on physical or structural properties of the state.
+This project investigates whether generative flow models can learn the distribution of quantum states **conditioned on their Stabilizer Rényi Entropy (SRE)**, enabling efficient generation of quantum states with a desired level of non-stabilizerness.
 
 ## Overview
 
-Generative models provide a way to learn complicated probability distributions from data and subsequently sample new instances from the learned distribution.
+The goal of this project is to develop a generative model capable of producing quantum states with a specified **Stabilizer Rényi Entropy (SRE)**.
 
-In this project, we apply **Flow Matching** to the problem of quantum-state generation.
+The Stabilizer Rényi Entropy provides a measure of the **non-stabilizerness**, or *magic*, of a quantum state. Stabilizer states have zero SRE, while states with increasing SRE exhibit increasingly non-stabilizer character.
 
-Given a quantum state represented by its state vector
-
-$$
-|\psi\rangle =
-\begin{pmatrix}
-\psi_0 \
-\psi_1 \
-\vdots \
-\psi_{2^n-1}
-\end{pmatrix},
-$$
-
-the model learns a time-dependent vector field
+Rather than sampling quantum states uniformly or generating them without regard to their physical properties, this project aims to learn a conditional distribution
 
 $$
-v_\theta(x,t,y),
+p(\psi \mid \mathrm{SRE}),
 $$
 
-which transports samples from a simple base distribution, such as a Gaussian distribution, toward the distribution of quantum states.
+where $\psi$ is a quantum state and the conditioning variable specifies its desired Stabilizer Rényi Entropy.
 
-The model can additionally be conditioned on properties of the quantum state, allowing it to learn different regions of the state space.
+The ultimate objective is therefore:
+
+$$
+\boxed{
+\text{SRE} \longrightarrow \text{Generative Flow Model}
+\longrightarrow \text{Quantum State}
+}
+$$
+
+Given a target SRE value, the trained model can be used to generate quantum states whose SRE is concentrated around the desired value.
 
 ---
 
-## Method
+## Motivation
 
-### Flow Matching
+### Why generate quantum states based on SRE?
 
-The training procedure constructs an interpolation between a Gaussian noise sample $\epsilon$ and a target quantum state $x$:
+Non-stabilizerness is an important resource in quantum computation and quantum information. Stabilizer states can be efficiently simulated classically, while non-stabilizer states provide computational resources that enable quantum advantage.
+
+The **Stabilizer Rényi Entropy** gives a quantitative way to characterize this resource.
+
+However, obtaining large collections of quantum states with controlled values of SRE can be computationally expensive. A generative model provides an alternative approach:
+
+1. Generate or collect a dataset of quantum states.
+2. Calculate the SRE of each state.
+3. Train a conditional generative model on the resulting $(\psi,\mathrm{SRE})$ pairs.
+4. Specify a target SRE.
+5. Generate new quantum states conditioned on that target.
+
+This transforms quantum-state generation into a **conditional generative modeling problem**.
+
+---
+
+## Problem Formulation
+
+For an $n$-qubit pure state,
 
 $$
-x_t = t x + (1-t)\epsilon,
+|\psi\rangle =
+\sum_{i=0}^{2^n-1} c_i |i\rangle,
 $$
 
-where
+we associate each state with its Stabilizer Rényi Entropy,
 
-* $x$ is a target quantum state,
-* $\epsilon$ is a sample from a Gaussian base distribution,
-* $t \sim U(0,1)$ is the flow time.
+$$
+S_R(\psi).
+$$
+
+The model is trained to learn the conditional distribution
+
+$$
+p(\psi \mid S_R).
+$$
+
+During generation, we provide a desired SRE value $s$ and sample from
+
+$$
+\psi \sim p_\theta(\psi \mid S_R=s).
+$$
+
+The generated state can then be evaluated independently to determine whether its actual SRE is close to the requested value.
+
+This gives a natural evaluation loop:
+
+```text
+       Target SRE
+           │
+           ▼
+   ┌─────────────────┐
+   │ Conditional     │
+   │ Flow Model      │
+   └────────┬────────┘
+            │
+            ▼
+    Generated State ψ
+            │
+            ▼
+      Calculate SRE
+            │
+            ▼
+     Compare with
+      Target SRE
+```
+
+---
+
+## Flow Matching
+
+The generative model is based on **Flow Matching**.
+
+Instead of directly learning the probability density of quantum states, the model learns a time-dependent vector field
+
+$$
+v_\theta(x,t,s),
+$$
+
+which transports samples from a simple base distribution toward the target quantum-state distribution.
+
+Here:
+
+* $x$ is the quantum-state representation,
+* $t\in[0,1]$ is the flow time,
+* $s$ is the target SRE,
+* $v_\theta$ is the learned vector field.
+
+A Gaussian noise sample $\epsilon$ is interpolated with a target state $x$:
+
+$$
+x_t = t x + (1-t)\epsilon.
+$$
 
 The corresponding target vector field is
 
 $$
-u_t(x_t) = x-\epsilon.
+u_t = x-\epsilon.
 $$
 
-The neural network is trained to predict this vector field:
-
-$$
-v_\theta(x_t,t,y) \approx x-\epsilon.
-$$
-
-Training therefore minimizes the mean-squared error
+The model minimizes
 
 $$
 \mathcal{L}
 ===========
 
-\mathbb{E}*{x,\epsilon,t}
+\mathbb{E}
 \left[
 \left|
-v*\theta(x_t,t,y)-(x-\epsilon)
+v_\theta(x_t,t,s)-(x-\epsilon)
 \right|^2
 \right].
 $$
 
-This allows the trained model to define an ODE that transports samples from the base distribution toward the learned quantum-state distribution.
+The learned vector field can subsequently be integrated as an ODE to transform Gaussian noise into a generated quantum state.
+
+---
+
+## SRE Conditioning
+
+The central feature of the model is **conditioning on Stabilizer Rényi Entropy**.
+
+The SRE value is embedded into a high-dimensional representation using a Fourier feature embedding. This allows the network to learn a smooth dependence between the target SRE and the generated state distribution.
+
+Conceptually:
+
+$$
+s
+\rightarrow
+\text{Fourier Embedding}
+\rightarrow
+\text{Conditional Flow Model}
+\rightarrow
+|\psi\rangle.
+$$
+
+This allows the same model to generate states across a range of SRE values instead of requiring a separate model for each target.
+
+For example:
+
+```text
+SRE = 0.0  ──────►  Generate low/non-magic states
+
+SRE = 0.5  ──────►  Generate moderately non-stabilizer states
+
+SRE = 1.0  ──────►  Generate more strongly non-stabilizer states
+
+SRE = target ────►  Generate states conditioned on target SRE
+```
 
 ---
 
 ## Model Architecture
 
-The repository currently contains two approaches to parameterizing the flow field.
+The repository currently explores two approaches for parameterizing the conditional flow field.
 
-### 1. MLP Flow Model
+### MLP Flow Model
 
-`Flow_Model_NN.py` implements a fully-connected neural network for learning the flow vector field.
+`Flow_Model_NN.py` implements a fully-connected neural network that takes the current state, flow time, and SRE conditioning as inputs.
 
-The network takes as input:
-
-* the current state $x_t$,
-* a time embedding $t$,
-* a conditioning label $y$.
-
-Time and scalar labels are transformed using **Fourier embeddings** before being passed to the network. The resulting representation is processed by a multilayer SiLU network that outputs a vector field with the same dimensionality as the input state.
-
-The basic architecture is:
+The architecture uses Fourier embeddings for the conditioning variables and SiLU-activated fully connected layers to predict the flow vector field.
 
 ```text
-Quantum state x_t
-       │
-       ├──────────────┐
-       │              │
-       ▼              ▼
- State representation   Time Fourier embedding
-       │              │
-       │        Label Fourier embedding
-       │              │
-       └───────┬──────┘
-               ▼
-        Fully Connected
-               │
-             SiLU
-               │
-        Fully Connected
-               │
-             SiLU
-               │
-        Fully Connected
-               │
-             SiLU
-               │
-               ▼
-        Predicted Vector Field
+                  Quantum State x_t
+                         │
+                         │
+                         ▼
+                   State Input
+                         │
+                         │
+        ┌────────────────┴────────────────┐
+        │                                 │
+        ▼                                 ▼
+  Time Embedding                    SRE Embedding
+        │                                 │
+        └────────────────┬────────────────┘
+                         ▼
+                  Neural Network
+                         │
+                  SiLU / Linear
+                         │
+                         ▼
+                Predicted Flow Field
+                         │
+                         ▼
+                       dx/dt
 ```
 
-### 2. Transformer Flow Model
+### Transformer Flow Model
 
-`Flow_Model_transformer.py` explores a transformer-based architecture for quantum-state representations.
+`Flow_Model_transformer.py` explores a transformer-based architecture for representing higher-dimensional quantum states.
 
-Rather than treating the entire state vector as a single input, the state vector can be divided into smaller **tokens**. These tokens are then projected into a higher-dimensional representation and processed using transformer-style components.
+The state vector can be divided into patches/tokens, embedded into a latent representation, and processed using transformer-style blocks.
 
-The transformer implementation includes components for:
-
-* zero-padding states with different dimensions,
-* splitting state vectors into patches,
-* patch embeddings,
-* Fourier time embeddings,
-* scalar label embeddings,
-* one-hot class embeddings,
-* adaptive normalization,
-* feed-forward transformer layers.
-
-This architecture is intended to provide a more scalable representation for quantum states as the number of qubits increases.
+The goal is to investigate whether transformer architectures can better capture structure in quantum-state distributions as the number of qubits increases.
 
 ---
 
-## Conditioning
+## Generation
 
-The flow model supports conditional generation.
-
-A scalar physical quantity can be encoded using a Fourier embedding:
+Once the model has been trained, generation begins from Gaussian noise:
 
 $$
-y
-\rightarrow
-[
-\cos(2\pi\omega_1y),
-\dots,
-\cos(2\pi\omega_dy),
-\sin(2\pi\omega_1y),
-\dots,
-\sin(2\pi\omega_dy)
-].
+x_0\sim\mathcal{N}(0,I).
 $$
 
-Discrete quantum-state classes can additionally be represented using one-hot embeddings.
-
-The model therefore has the general form
+The learned flow is then integrated according to
 
 $$
-v_\theta(x_t,t,y),
+\frac{dx}{dt}
+=============
+
+v_\theta(x,t,S_R)
 $$
 
-where $y$ specifies the desired condition.
+from $t=0$ to $t=1$.
 
-The implementation also supports **classifier-free guidance-style conditioning dropout**, where the conditioning information is randomly removed during training.
+The resulting $x_1$ represents the generated quantum state.
+
+The desired SRE is supplied throughout the integration, meaning that the generated state is explicitly conditioned on the requested non-stabilizerness.
+
+---
+
+## Evaluation
+
+A central question is whether the model actually generates states with the requested SRE.
+
+For a target SRE $S_{\mathrm{target}}$, generated states are evaluated independently:
+
+$$
+S_{\mathrm{generated}}
+======================
+
+S_R(\psi_{\mathrm{generated}}).
+$$
+
+The generation error can then be quantified as
+
+$$
+\Delta S
+========
+
+\left|
+S_{\mathrm{generated}}
+----------------------
+
+S_{\mathrm{target}}
+\right|.
+$$
+
+A successful model should produce a distribution satisfying
+
+$$
+\mathbb{E}[S_{\mathrm{generated}}]
+\approx
+S_{\mathrm{target}},
+$$
+
+while also reproducing other relevant properties of the underlying quantum-state distribution.
+
+---
+
+## Research Questions
+
+This project is primarily concerned with the following questions:
+
+* Can flow matching learn the distribution of quantum states conditioned on SRE?
+* Can a single model generate states across a continuous range of SRE values?
+* How accurately can the generated SRE match the requested SRE?
+* Does conditioning allow efficient sampling of rare or difficult-to-generate SRE regimes?
+* How does the quality of generation scale with the number of qubits?
+* Do transformer-based architectures improve over MLP-based flow models?
+* Beyond SRE itself, do generated states reproduce other statistical properties of the training distribution?
 
 ---
 
@@ -187,7 +317,7 @@ The implementation also supports **classifier-free guidance-style conditioning d
 Generative-Flow-Model-for-Quantum-States/
 │
 ├── Flow_Model_NN.py
-│   └── MLP-based flow-field network
+│   └── MLP-based conditional flow model
 │
 ├── Flow_Model_Training.py
 │   └── Flow-matching training procedure
@@ -196,7 +326,7 @@ Generative-Flow-Model-for-Quantum-States/
 │   └── Transformer-based flow model
 │
 ├── Flow_model_sampler.py
-│   └── Sampling / ODE integration
+│   └── ODE-based state generation
 │
 ├── plots_func.py
 │   └── Visualization utilities
@@ -205,7 +335,7 @@ Generative-Flow-Model-for-Quantum-States/
 │   └── Benchmarking experiments
 │
 ├── data/
-│   └── Training datasets
+│   └── Training data
 │
 └── LICENSE
 ```
@@ -214,157 +344,44 @@ Generative-Flow-Model-for-Quantum-States/
 
 ## Installation
 
-Clone the repository:
-
 ```bash
 git clone https://github.com/flaa-ux/Generative-Flow-Model-for-Quantum-States.git
 cd Generative-Flow-Model-for-Quantum-States
-```
 
-Install the required Python packages:
-
-```bash
 pip install torch torchvision numpy matplotlib
 ```
-
-The implementation is written in **PyTorch** and automatically uses an available accelerator when supported, otherwise falling back to the CPU.
-
----
-
-## Training
-
-The flow model is trained by sampling:
-
-1. A target quantum state $x$.
-2. A Gaussian noise vector $\epsilon$.
-3. A random time $t\in[0,1]$.
-4. An interpolated state $x_t$.
-5. The target vector field $x-\epsilon$.
-
-The network then minimizes the MSE between the predicted and target vector fields.
-
-A simplified version of the training procedure is:
-
-```python
-gaussian_noise = torch.randn(...)
-time = torch.rand(...)
-
-interpolated_state = (
-    time * target_state
-    + (1 - time) * gaussian_noise
-)
-
-target_vector_field = target_state - gaussian_noise
-
-predicted_vector_field = model(
-    interpolated_state,
-    label,
-    time
-)
-
-loss = MSELoss(
-    predicted_vector_field,
-    target_vector_field
-)
-```
-
-The training implementation uses the Adam optimizer and saves the resulting model parameters as a PyTorch `.pth` checkpoint.
-
----
-
-## Sampling
-
-After training, new quantum states can be generated by integrating the learned vector field.
-
-Starting from Gaussian noise,
-
-$$
-x_0 \sim \mathcal{N}(0,I),
-$$
-
-the model solves
-
-$$
-\frac{dx}{dt}
-=============
-
-v_\theta(x,t,y)
-$$
-
-from $t=0$ to $t=1$.
-
-The resulting state $x_1$ is a sample from the distribution learned by the model.
-
-The sampling implementation is contained in `Flow_model_sampler.py`.
-
----
-
-## Experiments
-
-The repository is intended to investigate questions such as:
-
-* Can flow models learn distributions of quantum states?
-* How well do generated states reproduce the statistics of the training distribution?
-* How does conditional generation perform across different quantum-state properties?
-* How does an MLP architecture compare with a transformer architecture?
-* How does the model scale with the number of qubits?
-* Can the learned flow efficiently generate physically meaningful quantum states?
 
 ---
 
 ## Current Status
 
-This repository is an ongoing research project.
+This is an ongoing research project exploring **SRE-conditioned generative modeling of quantum states**.
 
-Current work includes:
+Current directions include:
 
-* [x] Basic flow-matching formulation
-* [x] MLP flow-field model
-* [x] Fourier conditioning
+* [x] Flow-matching formulation
+* [x] Conditional flow-field model
+* [x] Fourier SRE embeddings
 * [x] Conditional generation
-* [x] Conditioning dropout
-* [x] Flow-model sampling
+* [x] ODE-based sampling
 * [x] Initial transformer architecture
-* [ ] Systematic benchmarking
+* [ ] Quantitative SRE-generation benchmarks
+* [ ] Generation across a broad SRE range
 * [ ] Scaling to larger numbers of qubits
-* [ ] Improved quantum-state representations
-* [ ] Comprehensive evaluation of generated states
-
----
-
-## Quantum State Representation
-
-For an $n$-qubit system, a pure quantum state is represented by a complex vector of dimension
-
-$$
-2^n.
-$$
-
-In numerical experiments, the real and imaginary components can be represented separately, giving a real-valued vector of dimension
-
-$$
-2^{n+1}.
-$$
-
-This representation allows standard neural-network architectures to operate directly on the state-vector representation.
-
-An important direction for future work is incorporating the physical structure of quantum states directly into the generative model rather than treating the state vector simply as a high-dimensional Euclidean vector.
+* [ ] Comparison between MLP and transformer architectures
+* [ ] Evaluation of generated-state statistics
+* [ ] Investigation of generation accuracy in high-SRE regimes
 
 ---
 
 ## References
 
-This project builds on ideas from **Flow Matching** and modern generative modeling.
+This project builds upon work in:
 
-* Lipman et al., *Flow Matching for Generative Modeling*, 2022.
-* Chen et al., *Flow Matching for Generative Modeling*, 2022.
-* Related work on generative modeling of quantum states.
-
----
-
-## License
-
-This project is licensed under the MIT License.
+* **Flow Matching for Generative Modeling**
+* **Stabilizer Rényi Entropy and measures of quantum non-stabilizerness**
+* Generative modeling of quantum states
+* Transformer architectures for high-dimensional generative modeling
 
 ---
 
@@ -372,4 +389,4 @@ This project is licensed under the MIT License.
 
 **Fansen Funata**
 
-This repository contains research and experimental code for investigating generative flow models applied to quantum-state distributions.
+Research project investigating the use of generative flow models for **SRE-conditioned quantum-state generation**.
